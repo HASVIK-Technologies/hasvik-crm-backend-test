@@ -1,0 +1,68 @@
+import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
+import {
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+
+import { UIUserRole } from '../../mongo/enums/user-role.enum';
+
+export class CreateUserDto {
+  @ApiProperty({
+    example: 'hasvik@example.com',
+    description: 'User email address',
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsEmail()
+  @IsNotEmpty()
+  email!: string;
+
+  @ApiProperty({
+    example: '+919876543210',
+    description: 'User phone number',
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(10)
+  phoneNumber!: string;
+
+  @ApiProperty({
+    example: 'hasvik',
+    description: 'User full name',
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(2)
+  @MaxLength(100)
+  fullName!: string;
+
+  @ApiProperty({
+    example: 'StrongPassword@123',
+    description: 'User password',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(8)
+  @MaxLength(100)
+  password!: string;
+
+  @ApiProperty({
+    example: UIUserRole.USER,
+    enum: UIUserRole,
+    description: 'User role',
+  })
+  @IsEnum(UIUserRole)
+  role!: UIUserRole;
+}

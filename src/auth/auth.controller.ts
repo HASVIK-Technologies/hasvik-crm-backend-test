@@ -1,0 +1,152 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { AuthGuard } from '@nestjs/passport';
+import type { Request, Response } from 'express';
+import { AuthService } from './auth.service';
+import { LoginDto } from './dto/login.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { CurrentUser } from './decorators/current-user.decorator';
+import type { AuthenticatedUser } from './interfaces/authenticated-user.interface';
+import { RefreshTokenGuard } from './guards/refresh-token.guard';
+
+@ApiTags('Auth')
+@Controller('auth')
+export class AuthController {
+  private readonly cookiePath = '/api/auth';
+  constructor(
+    private readonly authService: AuthService,
+  ) {}
+
+  @Post('login')
+  @ApiOperation({
+    summary: 'Login user',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User logged in successfully.',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid email or password.',
+  })
+  async login(
+    @Body() loginDto: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.login(loginDto);
+
+    response.cookie('refreshToken', result.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: this.cookiePath,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return {
+      accessToken: result.accessToken,
+    };
+  }
+
+  @Post('refresh')
+  @ApiOperation({
+    summary: 'Refresh access token',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Access token refreshed successfully.',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid or expired refresh token.',
+  })
+  @UseGuards(RefreshTokenGuard)
+  async refresh(
+    @Req()
+    request: Request & {
+      user: {
+        refreshToken: string;
+      };
+    },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result:any = await this.authService.refresh(
+      request.user.refreshToken,
+    );
+
+    response.cookie('refreshToken', result.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: this.cookiePath,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    }); 
+
+    return {
+      accessToken: result.accessToken,
+    };
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Logout user',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User logged out successfully.',
+  })
+  async logout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    await this.authService.logout(user.userId);
+
+    response.clearCookie('refreshToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: this.cookiePath,
+    });
+
+    return {
+      message: 'Logged out successfully',
+    };
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get current authenticated user',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current user returned successfully.',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized.',
+  })
+  async getCurrentUser(
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+
+    const currentUser = await this.authService.getCurrentUser(user.userId);
+    return currentUser;
+  }
+}

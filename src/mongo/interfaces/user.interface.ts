@@ -1,0 +1,22 @@
+import { Types } from 'mongoose';
+import { UserRole } from '../enums/user-role.enum';
+
+export interface User {
+  _id: Types.ObjectId;
+
+  tenantId: Types.ObjectId;
+  email: string;
+  phoneNumber: string;
+  fullName: string;
+  password: string;
+
+  role: UserRole;
+
+  isActive: boolean;
+  deletedAt?: Date;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type UserResponse = Omit<User, 'password'>;

@@ -1,0 +1,6 @@
+export enum FollowUpStatus {
+  SCHEDULED = 'SCHEDULED',
+  COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
+  OVERDUE = 'OVERDUE',
+}

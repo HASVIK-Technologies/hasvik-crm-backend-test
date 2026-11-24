@@ -1,0 +1,937 @@
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { isObjectIdOrHexString, Types } from 'mongoose';
+
+import { MongoService } from '../mongo/mongo.service';
+import { FollowUp } from '../mongo/interfaces';
+
+import { CreateFollowUpDto } from './dto/create-follow-up.dto';
+import { UpdateFollowUpDto } from './dto/update-follow-up.dto';
+import { FollowUpFilterDto, FollowUpKPIsDto } from './dto/get-follow-up-filter.dto';
+import { FollowUpStatus } from '../mongo/enums';
+import { FollowUpKpiResponse } from './interface/kpis-response';
+import moment from 'moment-timezone';
+import { FollowUpResponse } from './interface/followup-response';
+import { AuditLogService } from '../audit-log/audit-log.service';
+import { AuditLogAction, EntityType } from '../mongo/enums';
+
+@Injectable()
+export class FollowUpService {
+  private readonly logger = new Logger(FollowUpService.name);
+
+  constructor(
+    private readonly mongo: MongoService,
+    private readonly auditLogService: AuditLogService,
+  ) {}
+
+  // CREATE FOLLOW-UP
+  async create(
+    tenantId: string,
+    data: CreateFollowUpDto,
+    userId: string,
+  ): Promise<FollowUpResponse> {
+    this.logger.log(
+      `Creating follow-up. Businesgs ID: ${data.businessId}, Assigned To: ${data.assignedTo}, User ID: ${userId}, Tenant ID: ${tenantId}`,
+    );
+
+    if (!isObjectIdOrHexString(data.businessId)) {
+      this.logger.warn(
+        `Invalid business ID while creating follow-up: ${data.businessId}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Invalid business id.',
+      );
+    }
+
+    if (!isObjectIdOrHexString(data.assignedTo)) {
+      this.logger.warn(
+        `Invalid assigned user ID while creating follow-up: ${data.assignedTo}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Invalid assigned user id.',
+      );
+    }
+
+    // Verify business exists
+    const business = await this.mongo.models.business.findOne({
+      _id: this.mongo.toObjectId(data.businessId),
+      tenantId: this.mongo.toObjectId(tenantId),
+      isActive: true,
+    });
+
+    if (!business) {
+      this.logger.warn(
+        `Business not found while creating follow-up. Business ID: ${data.businessId}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Business not found.',
+      );
+    }
+
+    // Verify assigned user exists
+    const user = await this.mongo.models.user.findOne({
+      _id: this.mongo.toObjectId(data.assignedTo),
+      tenantId: this.mongo.toObjectId(tenantId),
+      isActive: true,
+    });
+
+    if (!user) {
+      this.logger.warn(
+        `Assigned user not found while creating follow-up. User ID: ${data.assignedTo}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Assigned user not found.',
+      );
+    }
+
+    // Remove note before creating the followup document
+    const { ...followUpData } = data;
+    // Create follow-up
+    const followUp = new this.mongo.models.followUp({
+      tenantId: this.mongo.toObjectId(tenantId),
+      ...followUpData,
+      createdBy: this.mongo.toObjectId(userId),
+    });
+  
+    let savedFollowUp = await followUp.save();
+    await savedFollowUp.populate([
+      {
+        path: 'businessId',
+        select: '_id name city phoneNumbers whatsappNumbers email',
+      },
+      {
+        path: 'assignedTo',
+        select: '_id fullName',
+      },
+      {
+        path: 'tagIds',
+        select: '_id name color description',
+      },
+    ]);
+
+    this.logger.log(
+      `Follow-up created successfully. Follow-up ID: ${savedFollowUp._id}, Tenant ID: ${tenantId}`,
+    );
+
+    await this.auditLogService.createAuditLog({
+      tenantId,
+      userId,
+      action: AuditLogAction.CREATE,
+      entityType: EntityType.FOLLOWUP,
+      entityId: savedFollowUp._id.toString(),
+      message: 'Follow-up created',
+      details: { newData: { ...followUpData, createdBy: userId } },
+    });
+
+    return this.mapFollowUpResponse(
+      savedFollowUp.toObject(),
+    );
+  }
+
+  // GET FOLLOW-UP BY ID
+  async findById(
+    tenantId: string,
+    id: string,
+  ): Promise<FollowUpResponse> {
+    this.logger.log(
+      `Fetching follow-up by ID: ${id}, Tenant ID: ${tenantId}`,
+    )
+
+    if (!isObjectIdOrHexString(id)) {
+      this.logger.warn(
+        `Invalid follow-up ID: ${id}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Invalid follow-up id.',
+      );
+    }
+
+    const followUp = await this.mongo.models.followUp
+     . findOne({ _id: this.mongo.toObjectId(id), tenantId })
+      .populate('businessId', '_id name city phoneNumbers whatsappNumbers email')
+      .populate('assignedTo', '_id fullName')
+      .populate('tagIds', '_id name color description')
+      .lean()
+      .exec();
+
+    if (!followUp) {
+      this.logger.warn(
+        `Follow-up not found. Follow-up ID: ${id}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Follow-up not found.',
+      );
+    }
+
+    this.logger.log(
+      `Follow-up fetched successfully. Follow-up ID: ${id}, Tenant ID: ${tenantId}`,
+    );
+
+    return {...this.mapFollowUpResponse(followUp)};
+  }
+
+  // GET ALL FOLLOW-UPS
+  async findAll(
+    tenantId: string,
+    query: FollowUpFilterDto,
+  ): Promise<{
+    data: FollowUpResponse[];
+    total: number;
+  }> {
+    const {isCalendarView} = query;
+    const filter: Record<string, any> =
+      this.filterforGetFollowUps(tenantId, query);
+
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const limtStage = {
+        $limit: limit,
+    };
+
+    const skipStage = {
+        $skip: skip,
+    };
+
+    const pipeline: any[] = [
+      {
+        $match: filter,
+      },
+
+      // 2. Populate business
+      {
+        $lookup: {
+          from: 'businesses',
+          localField: 'businessId',
+          foreignField: '_id',
+          as: 'businessId',
+          pipeline:[
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                city: 1,
+                phoneNumbers: 1,
+                whatsappNumbers: 1,
+                email: 1,
+              },
+            },
+          ]
+        },
+      },
+      {
+        $unwind: {
+          path: '$businessId',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      // 3. Populate assigned user
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedTo',
+          foreignField: '_id',
+          as: 'assignedTo',
+          pipeline:[
+            {
+              $project: {
+                _id: 1,
+                fullName: 1,
+              },
+            },
+          ]
+        },
+      },
+      {
+        $unwind: {
+          path: '$assignedTo',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      // 4. Populate tags
+      {
+        $lookup: {
+          from: 'tags',
+          let: {
+            tagIds: { $ifNull: ['$tagIds', []] },
+            followUpTenantId: '$tenantId',
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $in: ['$_id', '$$tagIds'] },
+                    { $eq: ['$tenantId', '$$followUpTenantId'] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                key: 1,
+                color: 1,
+              },
+            },
+          ],
+          as: 'tagIds',
+        },
+      },
+      // Sort
+      {
+        $sort: {
+          scheduledAt: 1,
+        },
+      },
+    ];
+
+    !isCalendarView && pipeline.push(skipStage);
+    !isCalendarView && pipeline.push(limtStage);
+    
+    const [followUps, total] = await Promise.all([
+      this.mongo.models.followUp.aggregate(pipeline),
+
+      this.mongo.models.followUp.countDocuments(filter),
+    ]);
+
+
+    this.logger.log(
+      `Follow-ups fetched successfully. Count: ${followUps.length}, Total: ${total}`,
+    );
+
+    return {
+      data: followUps.map((followup) =>
+        this.mapFollowUpResponse(followup),
+      ),
+      total,
+    };
+  }
+
+  // GET BUSINESS FOLLOW-UP HISTORY
+  async findByBusiness(
+    tenantId: string,
+    businessId: string,
+  ): Promise<FollowUpResponse[]> {
+    this.logger.log(
+      `Fetching follow-up history. Business ID: ${businessId}, Tenant Id: ${tenantId}`,
+    );
+
+    if (!isObjectIdOrHexString(businessId)) {
+      this.logger.warn(
+        `Invalid business ID: ${businessId}`,
+      );
+
+      throw new NotFoundException(
+        'Invalid business id.',
+      );
+    }
+
+    const followUps =
+      await this.mongo.models.followUp.aggregate([
+        // 1. Filter by business
+        {
+          $match: {
+            tenantId: this.mongo.toObjectId(tenantId),
+            businessId: this.mongo.toObjectId(businessId),
+          },
+        },
+
+        
+
+        // 5. Sort follow-ups
+        {
+          $sort: {
+            scheduledAt: -1,
+          },
+        },
+              // 4. Populate tags
+      {
+        $lookup: {
+          from: 'tags',
+          let: {
+            tagIds: { $ifNull: ['$tagIds', []] },
+            followUpTenantId: '$tenantId',
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $in: ['$_id', '$$tagIds'] },
+                    { $eq: ['$tenantId', '$$followUpTenantId'] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                key: 1,
+                color: 1,
+              },
+            },
+          ],
+          as: 'tagIds',
+        },
+      },
+      // 2. Populate business
+      {
+        $lookup: {
+          from: 'businesses',
+          localField: 'businessId',
+          foreignField: '_id',
+          as: 'businessId',
+          pipeline:[
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                city: 1,
+                phoneNumbers: 1,
+                whatsappNumbers: 1,
+                email: 1,
+              },
+            },
+          ]
+        },
+      },
+      {
+        $unwind: {
+          path: '$businessId',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      // 3. Populate assigned user
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedTo',
+          foreignField: '_id',
+          as: 'assignedTo',
+          pipeline:[
+            {
+              $project: {
+                _id: 1,
+                fullName: 1,
+              },
+            },
+          ]
+        },
+      },
+      {
+        $unwind: {
+          path: '$assignedTo',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+    ]).exec();
+
+    this.logger.log(
+      `Business follow-up history fetched successfully. Business ID: ${businessId}, Count: ${followUps.length}`,
+    );
+
+    return followUps.map((followup) =>
+      this.mapFollowUpResponse(followup),
+    );
+  }
+  
+
+  filterforGetFollowUps(
+    tenantId: string,
+    query: FollowUpFilterDto,
+  ): Record<string, any> {
+
+    const {
+      businessId,
+      assignedTo,
+      status,
+      type,
+      fromDate,
+      toDate,
+      tagIds
+    } = query;
+
+    const now = moment.utc();
+    const todayStart = now.clone().startOf('day');
+    const tomorrowStart = todayStart.clone().add(1, 'day');
+
+    const conditions: Record<string, any>[] = [];
+    const filter: Record<string, any> = { tenantId: this.mongo.toObjectId(tenantId) };
+
+    // Business filter
+    if (businessId) {
+      filter.businessId = this.mongo.toObjectId(businessId);
+    }
+
+    // Assigned user filter
+    if (assignedTo) {
+      filter.assignedTo = this.mongo.toObjectId(assignedTo);
+    }
+
+    // Follow-up type filter
+    if (type) {
+      filter.type = type;
+    }
+
+    // Tag IDs filter
+    if (tagIds && tagIds.length > 0) {
+      filter.tagIds = { $in: tagIds.map((id) => this.mongo.toObjectId(id)) };
+    }
+
+    // Explicit status filter
+    if (status) {
+      if (status === FollowUpStatus.OVERDUE) {
+        conditions.push({
+          status: FollowUpStatus.SCHEDULED,
+          scheduledAt: {
+            $lt: now.toDate(),
+          },
+        });
+      } else if (status === FollowUpStatus.SCHEDULED) {
+        conditions.push({
+          status: FollowUpStatus.SCHEDULED,
+          scheduledAt: {
+            $gte: now.toDate(),
+          },
+        });
+      } else if (status) {
+        conditions.push({ status });
+      }
+    }
+
+    // Custom date range
+    if (fromDate || toDate) {
+      const scheduledAt: Record<string, Date> = {};
+
+      if (fromDate) {
+        scheduledAt.$gte = moment.utc(fromDate).toDate();
+      }
+
+      if (toDate) {
+        scheduledAt.$lte = moment.utc(toDate).toDate();
+      }
+
+      conditions.push({ scheduledAt });
+    }
+
+    if (conditions.length > 0) {
+      filter.$and = conditions;
+    }
+
+    return filter;
+  }
+
+  
+  // GET USER FOLLOW-UPS
+  async findByAssignedUser(
+    tenantId: string,
+    userId: string,
+  ): Promise<FollowUpResponse[]> {
+    this.logger.log(
+      `Fetching follow-ups for assigned user. User ID: ${userId}, Tenant ID: ${tenantId}`,
+    );
+
+    if (!isObjectIdOrHexString(userId)) {
+      this.logger.warn(
+        `Invalid user ID: ${userId}`,
+      );
+
+      throw new NotFoundException(
+        'Invalid user id.',
+      );
+    }
+
+    const followUps =
+      await this.mongo.models.followUp.aggregate([
+        // 1. Filter by assigned user
+        {
+          $match: {
+            assignedTo: this.mongo.toObjectId(userId),
+            tenantId: this.mongo.toObjectId(tenantId)
+          },
+        },
+
+        // 2. Populate business
+        {
+          $lookup: {
+            from: 'businesses',
+            localField: 'businessId',
+            foreignField: '_id',
+            as: 'businessId',
+            pipeline:[
+              {
+                $project: {
+                  _id: 1,
+                  name: 1,
+                  city: 1,
+                  phoneNumbers: 1,
+                  whatsappNumbers: 1,
+                  email: 1,
+                },
+              },
+            ]
+          },
+        },
+        {
+          $unwind: {
+            path: '$businessId',
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+
+        // 3. Populate assigned user
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'assignedTo',
+            foreignField: '_id',
+            as: 'assignedTo',
+            pipeline:[
+              {
+                $project: {
+                  _id: 1,
+                  fullName: 1,
+                },
+              },
+            ]
+          },
+        },
+        {
+          $unwind: {
+            path: '$assignedTo',
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+
+        // 5. Sort follow-ups
+        {
+          $sort: {
+            scheduledAt: 1,
+          },
+        },
+      ]).exec();
+
+    this.logger.log(
+      `User follow-ups fetched successfully. User ID: ${userId}, Count: ${followUps.length}`,
+    );
+
+    return followUps.map((followup) =>
+      this.mapFollowUpResponse(followup),
+    );
+  }
+
+  // UPDATE FOLLOW-UP
+  async update(
+    tenantId: string,
+    id: string,
+    dto: UpdateFollowUpDto,
+    userId: string,
+  ): Promise<FollowUpResponse> {
+    this.logger.log(
+      `Updating follow-up. Follow-up ID: ${id}`,
+    );
+
+    if (!isObjectIdOrHexString(id)) {
+      this.logger.warn(
+        `Invalid follow-up ID: ${id}`,
+      );
+
+      throw new NotFoundException(
+        'Invalid follow-up id.',
+      );
+    }
+
+    const followUp =
+      await this.mongo.models.followUp
+        .findOneAndUpdate(
+          { _id: id, tenantId: this.mongo.toObjectId(tenantId) },
+          dto,
+          {
+            new: true,
+            runValidators: true,
+          },
+        )
+        .populate('businessId', '_id name city phoneNumbers whatsappNumbers email')
+        .populate('assignedTo', '_id fullName')
+        .lean()
+        .exec();
+
+    if (!followUp) {
+      this.logger.warn(
+        `Follow-up not found while updating. Follow-up ID: ${id}, Tenant ID: ${tenantId}`,
+      );
+
+      throw new NotFoundException(
+        'Follow-up not found.',
+      );
+    }
+
+    this.logger.log(
+      `Follow-up updated successfully. Follow-up ID: ${id}, Tenant ID: ${tenantId}`,
+    );
+
+    await this.auditLogService.createAuditLog({
+      tenantId,
+      userId,
+      action: AuditLogAction.UPDATE,
+      entityType: EntityType.FOLLOWUP,
+      entityId: id,
+      message: 'Follow-up updated',
+      details: { changedFields: Object.keys(dto) },
+    });
+
+    return this.mapFollowUpResponse(followUp);
+  }
+
+  async getKpis(tenantId: string, query: FollowUpKPIsDto): Promise<FollowUpKpiResponse> {
+    this.logger.log(
+      `Fetching follow-up KPIs.`,
+    );
+    
+    const startOfToday = moment.utc().startOf('day');
+    const startOfTomorrow = moment.utc().add(1, 'day').startOf('day');
+
+    const filter: Record<string, any> = this.filterforGetFollowUps(tenantId, query);
+
+    const pipeline: any = [
+      {
+        $match: filter,
+      },
+
+      {
+        $facet: {
+          // Total Follow-ups
+          total: [
+            {
+              $count: 'count',
+            },
+          ],
+
+          // Today's Follow-ups
+          today: [
+            {
+              $match: {
+                scheduledAt: {
+                  $gte: startOfToday.toDate(),
+                  $lt: startOfTomorrow.toDate(),
+                },
+              },
+            },
+            {
+              $count: 'count',
+            },
+          ],
+
+          // Upcoming Follow-ups
+          upcoming: [
+            {
+              $match: {
+                scheduledAt: {
+                  $gte: startOfTomorrow.toDate(),
+                },
+                status: FollowUpStatus.SCHEDULED,
+              },
+            },
+            {
+              $count: 'count',
+            },
+          ],
+
+          // Overdue Follow-ups
+          overdue: [
+            {
+              $match: {
+                status: FollowUpStatus.SCHEDULED,
+                scheduledAt: {
+                  $lt: moment.utc().toDate(),
+                },
+              },
+            },
+            { $count: 'count' },
+          ]
+        },
+      },
+
+      {
+        $project: {
+          total: {
+            $ifNull: [
+              { $arrayElemAt: ['$total.count', 0] },
+              0,
+            ],
+          },
+
+          today: {
+            $ifNull: [
+              { $arrayElemAt: ['$today.count', 0] },
+              0,
+            ],
+          },
+
+          upcoming: {
+            $ifNull: [
+              { $arrayElemAt: ['$upcoming.count', 0] },
+              0,
+            ],
+          },
+
+          overdue: {
+            $ifNull: [
+              { $arrayElemAt: ['$overdue.count', 0] },
+              0,
+            ],
+          },
+        },
+      },
+    ];
+    
+    const [result] = await this.mongo.models.followUp.aggregate(pipeline);
+
+    return (
+      result ?? {
+        total: 0,
+        today: 0,
+        upcoming: 0,
+        overdue: 0,
+      }
+    );
+  }
+
+  /**
+   * Get status suggestions for followup
+   */
+  getStatus(): Record<string, string> {
+
+    this.logger.log(`Fetching followup status`);
+
+    const statusObject: Record<string, string> = Object.entries(FollowUpStatus).reduce(
+      (acc, [key, value]) => {
+        acc[key] = value;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+
+    return statusObject;
+  }
+
+  async updateStatus(
+    tenantId: string,
+    id: string,
+    status: FollowUpStatus.COMPLETED | FollowUpStatus.CANCELLED,
+    userId: string,
+  ): Promise<FollowUpResponse> {
+    this.logger.log(
+      `Updating follow-up status. Follow-up ID: ${id}, Status: ${status}, User ID: ${userId}, Tenant ID: ${tenantId}`,
+    );
+
+    if (!isObjectIdOrHexString(id)) {
+      this.logger.warn(`Invalid follow-up ID: ${id}`);
+      throw new NotFoundException('Invalid follow-up id.');
+    }
+
+    if (!isObjectIdOrHexString(userId)) {
+      this.logger.warn(`Invalid user ID: ${userId}`);
+      throw new NotFoundException('Invalid user id.');
+    }
+
+    const update: Record<string, any> = {
+      status,
+      updatedBy: new Types.ObjectId(userId),
+    };
+
+    if (status === FollowUpStatus.COMPLETED) {
+      update.completedAt = new Date();
+    }
+
+    if (status === FollowUpStatus.CANCELLED) {
+      update.completedAt = null;
+    }
+
+    const followUp =
+      await this.mongo.models.followUp
+        .findOneAndUpdate(
+          {
+            _id: this.mongo.toObjectId(id),
+            tenantId: this.mongo.toObjectId(tenantId),
+          },
+          {
+            $set: update,
+          },
+          {
+            new: true,
+            runValidators: true,
+          },
+        )
+        .populate('businessId', '_id name city phoneNumbers whatsappNumbers email')
+        .populate('assignedTo', '_id fullName')
+        .lean()
+        .exec();
+
+    if (!followUp) {
+      throw new NotFoundException(
+        'Follow-up not found or cannot be updated.',
+      );
+    }
+
+    this.logger.log(
+      `Follow-up status updated successfully. Follow-up ID: ${id}, Status: ${status}, Tenant ID: ${tenantId}`,
+    );
+
+    await this.auditLogService.createAuditLog({
+      tenantId,
+      userId,
+      action:
+        status === FollowUpStatus.CANCELLED
+          ? AuditLogAction.DELETE
+          : AuditLogAction.STATUS_CHANGE,
+      entityType: EntityType.FOLLOWUP,
+      entityId: id,
+      message: `Follow-up status changed to ${status.toLowerCase()}`,
+      details: { status },
+    });
+
+    return this.mapFollowUpResponse(followUp);
+  }
+
+  private mapFollowUpResponse(followup: FollowUp): FollowUpResponse {
+    const { businessId, assignedTo,tagIds, ...followUpData } = followup;
+
+    return {
+      ...followUpData,
+      tags: tagIds || [],
+      business: businessId,
+      assignee: assignedTo,
+      status: this.getRuntimeStatus(followup.status, followup.scheduledAt,), 
+    } as unknown as FollowUpResponse;
+  }
+
+  private getRuntimeStatus(
+    status: FollowUpStatus,
+    scheduledAt: Date,
+  ): FollowUpStatus {
+    if (
+      status === FollowUpStatus.SCHEDULED &&
+      moment.utc(scheduledAt).isBefore(moment.utc())
+    ) {
+      return FollowUpStatus.OVERDUE;
+    }
+
+    return status;
+  }
+}

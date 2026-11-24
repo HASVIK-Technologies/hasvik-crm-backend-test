@@ -1,0 +1,237 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards
+} from '@nestjs/common';
+import { Request } from 'express';
+
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+
+import { CreateFollowUpDto } from './dto/create-follow-up.dto';
+import { UpdateFollowUpDto } from './dto/update-follow-up.dto';
+import { FollowUpFilterDto, FollowUpKPIsDto } from './dto/get-follow-up-filter.dto';
+import { FollowUpService } from './followup.service';
+
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { SubscriptionGuard } from '../auth/guards/subscription.guard';
+import { Permissions } from '../auth/decorators/permissions.decorator';
+import { Permission } from '../auth/enums/permission.enum';
+import { UpdateFollowUpStatusDto } from './dto/Update-follow-up-status.dto';
+
+@ApiTags('Follow Ups')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionsGuard, SubscriptionGuard)
+@Controller('follow-ups')
+export class FollowUpController {
+  constructor(
+    private readonly followUpService: FollowUpService,
+  ) {}
+
+  /**
+   * Create Follow-up
+   */
+  @Post()
+  @Permissions(Permission.FOLLOW_UP_CREATE)
+  @ApiOperation({
+    summary: 'Create a new follow-up',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Follow-up created successfully.',
+  })
+  async create(
+    @Body() dto: CreateFollowUpDto, @Req() req: any
+  ) {
+    // Replace with authenticated user ID
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId;
+
+    return await this.followUpService.create(
+      tenantId,
+      dto,
+      userId,
+    );
+  }
+
+  /**
+   * Get all Follow-ups
+   */
+  @Get()
+  @ApiOperation({
+    summary: 'Get follow-ups',
+    description:
+      'Get follow-ups with optional filtering and pagination.',
+  })
+  @Permissions(Permission.FOLLOW_UP_READ)
+  @ApiResponse({
+    status: 200,
+    description: 'Follow-ups retrieved successfully.',
+  })
+  async findAll(
+    @Query() query: FollowUpFilterDto,
+    @Req() req: any
+  ) {
+    const tenantId = req.user.tenantId;
+    return await this.followUpService.findAll(tenantId, query);
+  }
+
+  /**
+   * Get Follow-ups by Business
+   */
+  @Get('business/:businessId')
+  @Permissions(Permission.FOLLOW_UP_READ)
+  @ApiOperation({
+    summary: 'Get follow-up history for a business',
+  })
+  @ApiParam({
+    name: 'businessId',
+    description: 'Business ID',
+    example: '665c12345678901234567890',
+  })
+  async findByBusiness(
+    @Param('businessId') businessId: string,
+    @Req() req: any
+  ) {
+    const tenantId = req.user.tenantId;
+    return await this.followUpService.findByBusiness(
+      tenantId,
+      businessId,
+    );
+  }
+
+  /**
+   * Get Follow-ups by Assigned User
+   */
+  @Get('assigned/:userId')
+  @Permissions(Permission.FOLLOW_UP_READ)
+  @ApiOperation({
+    summary: 'Get follow-ups assigned to a user',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'Assigned user ID',
+    example: '665c98765432109876543210',
+  })
+  async findByAssignedUser(
+    @Param('userId') userId: string,
+    @Req() req: any
+  ) {
+    const tenantId = req.user.tenantId;
+    return await this.followUpService.findByAssignedUser(
+      tenantId,
+      userId,
+    );
+  }
+
+  @Get('kpis')
+  @Permissions(Permission.FOLLOW_UP_READ)
+  @ApiOperation({
+    summary: 'Get follow-up KPIs',
+    description: 'Returns key performance indicators for follow-ups.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Follow-ups retrieved successfully.',
+  })
+  async getKpis(@Query() query: FollowUpKPIsDto, @Req() req: any) {
+    const tenantId = req.user.tenantId;
+    return await this.followUpService.getKpis(tenantId, query);
+  }
+
+  @Get('statuses')
+  @Permissions(Permission.FOLLOW_UP_READ)
+  @ApiOperation({
+    summary: 'Get follow-up statuses',
+    description: 'Returns the available statuses for follow-ups.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Follow-ups retrieved successfully.',
+  })
+  async getStatus() {
+    return this.followUpService.getStatus();
+  }
+
+  /**
+   * Get Follow-up by ID
+   */
+  @Get(':id')
+  @Permissions(Permission.FOLLOW_UP_READ)
+  @ApiOperation({
+    summary: 'Get follow-up by ID',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Follow-up ID',
+    example: '665cabcd1234567890123456',
+  })
+  async findById(
+    @Param('id') id: string,
+    @Req() req: any
+  ) {
+    const tenantId = req.user.tenantId;
+    return await this.followUpService.findById(tenantId, id);
+  }
+
+  @Patch(':id/status')
+  @Permissions(Permission.FOLLOW_UP_UPDATE)
+  async updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateFollowUpStatusDto,
+    @Req() req: any
+  ) {
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId;
+
+    return this.followUpService.updateStatus(
+      tenantId,
+      id,
+      dto.status,
+      userId
+    );
+  }
+
+  /**
+   * Update Follow-up
+   */
+  @Patch(':id')
+  @Permissions(Permission.FOLLOW_UP_UPDATE)
+  @ApiOperation({
+    summary: 'Update follow-up',
+    description:
+      'Update follow-up details such as type, schedule, assignment or notes.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Follow-up ID',
+    example: '665cabcd1234567890123456',
+  })
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateFollowUpDto,
+    @Req() req: any
+  ) {
+
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId;
+    return await this.followUpService.update(
+      tenantId,
+      id,
+      dto,
+      userId
+    );
+  }
+}

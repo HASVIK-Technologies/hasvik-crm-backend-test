@@ -1,0 +1,185 @@
+import { Schema, Types } from 'mongoose';
+import { Business, BusinessLocation, ContactNumber } from '../interfaces';
+import { BusinessStatus } from '../enums';
+
+const ContactNumberSchema: Schema<ContactNumber> = new Schema<ContactNumber>(
+  {
+    number: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    name: {
+      type: String,
+    },
+    isPrimary: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
+const BusinessLocationSchema: Schema<BusinessLocation> =
+  new Schema<BusinessLocation>(
+    {
+      url: {
+        type: String,
+        trim: true,
+      },
+    },
+    {
+      _id: false,
+    },
+  );
+
+export const BusinessSchema: Schema<Business> = new Schema<Business>(
+  {
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      required: true,
+      index: true,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      index: true,
+    },
+    description: {
+      type: String
+    },
+    categoryId: {
+      type: Types.ObjectId,
+      ref: 'Category',
+      default: null,
+      index: true,
+    },
+
+    status: {
+      type: String,
+      enum: Object.values(BusinessStatus),
+      default: BusinessStatus.NEW,
+      index: true,
+    },
+
+    phoneNumbers: {
+      type: [ContactNumberSchema],
+      default: [],
+    },
+
+    whatsappNumbers: {
+      type: [ContactNumberSchema],
+      default: [],
+    },
+
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
+
+    website: {
+      type: String,
+      trim: true,
+    },
+
+    address: {
+      type: String,
+      trim: true,
+    },
+
+    city: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    state: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    pincode: {
+      type: String,
+      trim: true,
+    },
+
+    location: {
+      type: BusinessLocationSchema,
+      default: null,
+    },
+
+    assignedTo: {
+      type: Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+
+    tagIds: {
+      type: [Schema.Types.ObjectId],
+      ref: 'Tag',
+      default: [],
+      index: true,
+    },
+
+    createdBy: {
+      type: Types.ObjectId,
+      ref: 'User',
+    },
+
+    updatedBy: {
+      type: Types.ObjectId,
+      ref: 'User',
+    },
+
+    leadSource: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+  },
+
+  {
+    timestamps: true,
+    collection: 'businesses',
+  },
+);
+
+/**
+ * Compound indexes
+ */
+
+BusinessSchema.index({
+  status: 1,
+  categoryId: 1,
+  assignedTo: 1,
+});
+
+BusinessSchema.index({
+  city: 1,
+  state: 1,
+});
+
+BusinessSchema.index({
+  createdAt: -1,
+});
+
+/**
+ * Text search
+ */
+
+BusinessSchema.index({
+  name: 'text',
+  email: 'text',
+});

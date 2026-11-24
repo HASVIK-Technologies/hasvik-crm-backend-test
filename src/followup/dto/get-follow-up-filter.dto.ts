@@ -1,0 +1,126 @@
+import {
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsEnum,
+  IsMongoId,
+  IsNumberString,
+  IsOptional,
+} from 'class-validator';
+import { ApiPropertyOptional, OmitType } from '@nestjs/swagger';
+
+import {
+  FollowUpStatus,
+  FollowUpType,
+} from '../../mongo/enums';
+import { Transform } from 'class-transformer';
+
+export class FollowUpFilterDto {
+  @ApiPropertyOptional({
+    example: '665c12345678901234567890',
+    description: 'Filter follow-ups by business ID',
+  })
+  @IsOptional()
+  @IsMongoId()
+  businessId?: string;
+
+  @ApiPropertyOptional({
+    example: '665c98765432109876543210',
+    description: 'Filter follow-ups assigned to a specific user',
+  })
+  @IsOptional()
+  @IsMongoId()
+  assignedTo?: string;
+
+  @ApiPropertyOptional({
+    enum: FollowUpStatus,
+    example: FollowUpStatus.SCHEDULED,
+    description: 'Filter follow-ups by status',
+  })
+  @IsOptional()
+  @IsEnum(FollowUpStatus)
+  status?: FollowUpStatus;
+
+  @ApiPropertyOptional({
+    enum: FollowUpType,
+    example: FollowUpType.CALL,
+    description: 'Filter follow-ups by type',
+  })
+  @IsOptional()
+  @IsEnum(FollowUpType)
+  type?: FollowUpType;
+
+    @ApiPropertyOptional({
+    description: 'Comma-separated tag IDs',
+    example: '673a12345678901234567890,673a12345678901234567891',
+    type: String,
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
+    }
+
+    return value;
+  })
+  @IsArray()
+  @ArrayUnique()
+  @IsMongoId({ each: true })
+  tagIds?: string[];
+    
+  @ApiPropertyOptional({
+    example: '2026-08-28T00:00:00.000Z',
+    description: 'Return follow-ups scheduled from this date',
+  })
+  @IsOptional()
+  @IsDateString()
+  fromDate?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-08-31T23:59:59.999Z',
+    description: 'Return follow-ups scheduled until this date',
+  })
+  @IsOptional()
+  @IsDateString()
+  toDate?: string;
+
+  @ApiPropertyOptional({
+    example: false,
+  })
+  @Transform(({ value }) => {
+      if (typeof value === 'boolean') return value;
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+      return value;
+    })
+  @IsOptional()
+  @IsBoolean()
+  isCalendarView!: boolean;
+
+  @ApiPropertyOptional({
+    example: '1',
+    default: '1',
+    description: 'Page number',
+  })
+  @IsOptional()
+  @IsNumberString()
+  page?: string;
+
+  @ApiPropertyOptional({
+    example: '10',
+    default: '10',
+    description: 'Number of follow-ups per page',
+  })
+  @IsOptional()
+  @IsNumberString()
+  limit?: string;
+}
+
+export class FollowUpKPIsDto extends OmitType(
+  FollowUpFilterDto,
+  ['page', 'limit'] as const,
+) {}
