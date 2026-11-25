@@ -24,6 +24,15 @@ export class NotificationRestClient {
   async sendBulk(
     notifications: ReminderRequest[],
   ): Promise<ReminderResponse[]> {
+    const circuitBreaker = this.config
+      .get<string>('CB_NOTIFICATION_SERVICE')
+      ?.trim()
+      .toLowerCase();
+    if (circuitBreaker === 'true')
+      throw new ServiceUnavailableException(
+        'Notification service is disabled by CB_NOTIFICATION_SERVICE',
+      );
+
     const url = this.config.get<string>('NOTIFICATION_SERVICE_URL');
     const token = this.config.get<string>('NOTIFICATION_SERVICE_TOKEN');
     if (!url || !token)

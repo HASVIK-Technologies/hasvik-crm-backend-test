@@ -84,6 +84,10 @@ that channel. Each switch defaults to `false` (delivery remains enabled) when
 unset. Any value other than `true`, ignoring case and surrounding whitespace,
 also leaves delivery enabled.
 
+Set `CB_NOTIFICATION_SERVICE=true` to stop outbound requests to the notification
+service. It defaults to `false` (requests remain enabled) when unset; only the
+value `true`, ignoring case and surrounding whitespace, disables requests.
+
 ## Compile and run the project
 
 ```bash

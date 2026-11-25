@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { NotificationRestClient } from './notification-rest.client';
 jest.mock('axios');
 describe('NotificationRestClient', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   const config = {
     get: (key: string) =>
       (
@@ -36,6 +40,21 @@ describe('NotificationRestClient', () => {
         headers: { Authorization: 'Bearer test-token' },
       }),
     );
+  });
+  it('does not call the notification service when its circuit breaker is true', async () => {
+    const disabledConfig = {
+      get: (key: string) =>
+        key === 'CB_NOTIFICATION_SERVICE'
+          ? ' true '
+          : config.get(key),
+    } as ConfigService;
+
+    await expect(
+      new NotificationRestClient(disabledConfig).sendBulk([]),
+    ).rejects.toThrow(
+      'Notification service is disabled by CB_NOTIFICATION_SERVICE',
+    );
+    expect(axios.post).not.toHaveBeenCalled();
   });
   it('rejects incomplete bulk responses so requests can retry', async () => {
     (axios.post as jest.Mock).mockResolvedValue({ data: { results: [] } });
